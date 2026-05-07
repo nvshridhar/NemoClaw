@@ -47,7 +47,7 @@ describe("agent definitions", () => {
       envFile: null,
       format: "json",
     });
-    expect(openclaw.messagingPlatforms).toEqual(["telegram", "discord", "slack"]);
+    expect(openclaw.messagingPlatforms).toEqual(["telegram", "discord", "slack", "wechat"]);
     expect(openclaw.legacyPaths?.startScript).toContain("scripts/nemoclaw-start.sh");
   });
 
@@ -64,7 +64,7 @@ describe("agent definitions", () => {
       format: "yaml",
     });
     expect(hermes.healthProbe.url).toBe("http://localhost:8642/health");
-    expect(hermes.messagingPlatforms).toEqual(["telegram", "discord", "slack"]);
+    expect(hermes.messagingPlatforms).toEqual(["telegram", "discord", "slack", "wechat"]);
   });
 
   it("orders OpenClaw first in interactive choices", () => {

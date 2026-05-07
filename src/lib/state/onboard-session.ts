@@ -97,12 +97,25 @@ export interface Session {
   migratedLegacyValueHashes: Record<string, string> | null;
   gpuPassthrough: boolean;
   telegramConfig: TelegramConfig | null;
+  wechatConfig: WechatConfig | null;
   metadata: SessionMetadata;
   steps: Record<string, StepState>;
 }
 
 export interface TelegramConfig {
   requireMention: boolean;
+}
+
+export interface WechatConfig {
+  // Stable per-account id returned by iLink (`ilink_bot_id`). Non-secret.
+  accountId?: string;
+  // Per-account base URL. Rotates via IDC redirects, so a change here is a
+  // signal that we are now talking to a different gateway and the sandbox
+  // must be rebuilt.
+  baseUrl?: string;
+  // WeChat user id of the operator who scanned the QR. PII-adjacent but not
+  // secret — added to the DM allowlist by default.
+  userId?: string;
 }
 
 export interface LockInfo {
@@ -140,6 +153,7 @@ export interface SessionUpdates {
   migratedLegacyValueHashes?: Record<string, string>;
   gpuPassthrough?: boolean;
   telegramConfig?: TelegramConfig | null;
+  wechatConfig?: WechatConfig | null;
   metadata?: { gatewayName?: string; fromDockerfile?: string | null };
 }
 
@@ -241,6 +255,18 @@ function parseTelegramConfig(value: unknown): TelegramConfig | null {
   return null;
 }
 
+function parseWechatConfig(value: unknown): WechatConfig | null {
+  if (!isObject(value)) return null;
+  const result: WechatConfig = {};
+  const accountId = readString(value.accountId);
+  const baseUrl = readString(value.baseUrl);
+  const userId = readString(value.userId);
+  if (accountId) result.accountId = accountId;
+  if (baseUrl) result.baseUrl = baseUrl;
+  if (userId) result.userId = userId;
+  return Object.keys(result).length > 0 ? result : null;
+}
+
 function parseSessionMetadata(value: SessionJsonValue | undefined): SessionMetadata | undefined {
   if (!isObject(value)) return undefined;
   return {
@@ -325,6 +351,7 @@ export function createSession(overrides: Partial<Session> = {}): Session {
       : null,
     gpuPassthrough: overrides.gpuPassthrough === true,
     telegramConfig: parseTelegramConfig(overrides.telegramConfig),
+    wechatConfig: parseWechatConfig(overrides.wechatConfig),
     metadata: {
       gatewayName: overrides.metadata?.gatewayName ?? "nemoclaw",
       fromDockerfile: overrides.metadata?.fromDockerfile ?? null,
@@ -361,6 +388,7 @@ export function normalizeSession(data: Session | SessionJsonValue | undefined): 
     migratedLegacyValueHashes: readStringRecord(data.migratedLegacyValueHashes),
     gpuPassthrough: data.gpuPassthrough === true,
     telegramConfig: parseTelegramConfig(data.telegramConfig),
+    wechatConfig: parseWechatConfig(data.wechatConfig),
     lastStepStarted: readString(data.lastStepStarted),
     lastCompletedStep: readString(data.lastCompletedStep),
     failure: sanitizeFailure(isObject(data.failure) ? data.failure : null),
@@ -787,6 +815,12 @@ export function filterSafeUpdates(updates: SessionUpdates): Partial<Session> {
     safe.telegramConfig = { requireMention: updates.telegramConfig.requireMention };
   } else if (updates.telegramConfig === null) {
     safe.telegramConfig = null;
+  }
+  if (isObject(updates.wechatConfig)) {
+    const parsed = parseWechatConfig(updates.wechatConfig);
+    if (parsed) safe.wechatConfig = parsed;
+  } else if (updates.wechatConfig === null) {
+    safe.wechatConfig = null;
   }
   if (isObject(updates.metadata) && typeof updates.metadata.gatewayName === "string") {
     safe.metadata = {
