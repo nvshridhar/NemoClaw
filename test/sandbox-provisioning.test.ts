@@ -261,6 +261,7 @@ describe("sandbox provisioning: copied OpenClaw helper permissions (#2861)", () 
       path.join(localBin, "nemoclaw-codex-acp"),
       path.join(localLib, "sandbox-init.sh"),
       path.join(localLib, "generate-openclaw-config.py"),
+      path.join(localLib, "seed-wechat-accounts.py"),
       path.join(localLib, "ws-proxy-fix.js"),
       pluginFile,
       nestedPluginFile,
