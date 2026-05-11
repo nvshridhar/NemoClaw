@@ -1,13 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { DiscordGuilds, MessagingAllowedIds, WechatConfig } from "./build-env.ts";
+import type { DiscordGuilds, MessagingAllowedIds } from "./build-env.ts";
 
 const CHANNEL_TOKEN_ENVS: Record<string, string[]> = {
   telegram: ["TELEGRAM_BOT_TOKEN"],
   discord: ["DISCORD_BOT_TOKEN"],
   slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
-  wechat: ["WECHAT_BOT_TOKEN"],
 };
 
 const HERMES_DISCORD_PROXY = "http://127.0.0.1:3129";
@@ -17,7 +16,6 @@ export function buildMessagingEnvLines(
   enabledChannels: Set<string>,
   allowedIds: MessagingAllowedIds,
   discordGuilds: DiscordGuilds,
-  wechatConfig: WechatConfig = {},
 ): string[] {
   const envLines = ["API_SERVER_PORT=18642", "API_SERVER_HOST=127.0.0.1"];
 
@@ -42,24 +40,6 @@ export function buildMessagingEnvLines(
   }
   if (allowedIds.telegram?.length) {
     envLines.push(`TELEGRAM_ALLOWED_USERS=${allowedIds.telegram.map(String).join(",")}`);
-  }
-  if (enabledChannels.has("wechat")) {
-    if (allowedIds.wechat?.length) {
-      envLines.push(`WECHAT_ALLOWED_USERS=${allowedIds.wechat.map(String).join(",")}`);
-    }
-    // WeChat per-account metadata is non-secret; emit literal values rather
-    // than openshell:resolve:env: placeholders so the in-sandbox wrapper
-    // plugin can read them directly without going through the credentials
-    // gateway. The bot token (WECHAT_BOT_TOKEN above) stays a placeholder.
-    if (wechatConfig.accountId) {
-      envLines.push(`WECHAT_ACCOUNT_ID=${wechatConfig.accountId}`);
-    }
-    if (wechatConfig.baseUrl) {
-      envLines.push(`WECHAT_BASE_URL=${wechatConfig.baseUrl}`);
-    }
-    if (wechatConfig.userId) {
-      envLines.push(`WECHAT_USER_ID=${wechatConfig.userId}`);
-    }
   }
 
   return envLines;
