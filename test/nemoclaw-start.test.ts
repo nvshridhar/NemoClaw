@@ -215,6 +215,8 @@ describe("nemoclaw-start non-root fallback", () => {
         snippet,
         'printf "CHAT_UI_URL=%s\\n" "$CHAT_UI_URL"',
         'printf "PUBLIC_PORT=%s\\n" "$PUBLIC_PORT"',
+        'printf "OPENCLAW_GATEWAY_PORT=%s\\n" "$OPENCLAW_GATEWAY_PORT"',
+        'printf "OPENCLAW_GATEWAY_URL=%s\\n" "$OPENCLAW_GATEWAY_URL"',
         'printf "SANDBOX_HOME=%s\\n" "$_SANDBOX_HOME"',
         'printf "CMD=%s\\n" "${NEMOCLAW_CMD[*]}"',
       ].join("\n");
@@ -238,6 +240,8 @@ describe("nemoclaw-start non-root fallback", () => {
       expect(injected.status).toBe(0);
       expect(injected.stdout).toContain("CHAT_UI_URL=http://127.0.0.1:19000");
       expect(injected.stdout).toContain("PUBLIC_PORT=19000");
+      expect(injected.stdout).toContain("OPENCLAW_GATEWAY_PORT=19000");
+      expect(injected.stdout).toContain("OPENCLAW_GATEWAY_URL=ws://127.0.0.1:19000");
       expect(injected.stdout).toContain("SANDBOX_HOME=/sandbox");
       expect(injected.stdout).toContain("CMD=openclaw agent --agent main");
 
@@ -247,6 +251,8 @@ describe("nemoclaw-start non-root fallback", () => {
       expect(baked.status).toBe(0);
       expect(baked.stdout).toContain("CHAT_UI_URL=https://baked.example.test/ui");
       expect(baked.stdout).toContain("PUBLIC_PORT=18789");
+      expect(baked.stdout).toContain("OPENCLAW_GATEWAY_PORT=18789");
+      expect(baked.stdout).toContain("OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789");
       expect(baked.stdout).toContain("SANDBOX_HOME=/sandbox");
       expect(baked.stdout).toContain("CMD=openclaw agent");
     } finally {
@@ -263,6 +269,7 @@ describe("nemoclaw-start non-root fallback", () => {
       'normalize_mutable_config_perms() { :; }',
       'apply_model_override() { :; }',
       'apply_cors_override() { :; }',
+      'ensure_gateway_token() { :; }',
       'export_gateway_token() { :; }',
       'write_runtime_shell_env() { :; }',
       'ensure_runtime_shell_env_shim() { :; }',
@@ -383,7 +390,12 @@ describe("nemoclaw-start gateway preload process detection (#2478)", () => {
 describe("nemoclaw-start gateway token export (#1114)", () => {
   const src = fs.readFileSync(START_SCRIPT, "utf-8");
 
-  function runGatewayTokenHarness(configJson: string, initialToken = "stale-token") {
+  function runGatewayTokenHarness(
+    configJson: string,
+    initialToken = "stale-token",
+    port = "18789",
+    ensureToken = false,
+  ) {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-token-"));
     const openclawDir = path.join(tmpDir, ".openclaw");
     const proxyEnv = path.join(tmpDir, "proxy-env.sh");
@@ -392,6 +404,10 @@ describe("nemoclaw-start gateway token export (#1114)", () => {
     fs.writeFileSync(path.join(openclawDir, "openclaw.json"), configJson);
 
     const readToken = extractShellFunctionFromSource(src, "_read_gateway_token").replaceAll(
+      "/sandbox/.openclaw/openclaw.json",
+      path.join(openclawDir, "openclaw.json"),
+    );
+    const ensureGatewayToken = extractShellFunctionFromSource(src, "ensure_gateway_token").replaceAll(
       "/sandbox/.openclaw/openclaw.json",
       path.join(openclawDir, "openclaw.json"),
     );
@@ -406,11 +422,14 @@ describe("nemoclaw-start gateway token export (#1114)", () => {
         "set -euo pipefail",
         'emit_sandbox_sourced_file() { local target="$1"; cat > "$target"; chmod 444 "$target"; }',
         readToken,
+        ...(ensureToken ? [ensureGatewayToken, "ensure_gateway_token"] : []),
         exportToken,
         printDashboard,
         runtimeEnv,
         `export OPENCLAW_GATEWAY_TOKEN=${JSON.stringify(initialToken)}`,
-        'PUBLIC_PORT="18789"',
+        `export OPENCLAW_GATEWAY_PORT=${JSON.stringify(port)}`,
+        `export OPENCLAW_GATEWAY_URL=${JSON.stringify(`ws://127.0.0.1:${port}`)}`,
+        `PUBLIC_PORT=${JSON.stringify(port)}`,
         'CHAT_UI_URL="https://remote.example.test/ui"',
         'PROXY_HOST="10.200.0.1"',
         'PROXY_PORT="3128"',
@@ -436,8 +455,9 @@ describe("nemoclaw-start gateway token export (#1114)", () => {
 
     const result = spawnSync("bash", [scriptPath], { encoding: "utf-8", timeout: 5000 });
     const envFile = fs.existsSync(proxyEnv) ? fs.readFileSync(proxyEnv, "utf-8") : "";
+    const configAfter = JSON.parse(fs.readFileSync(path.join(openclawDir, "openclaw.json"), "utf-8"));
     fs.rmSync(tmpDir, { recursive: true, force: true });
-    return { result, envFile };
+    return { result, envFile, configAfter };
   }
 
   it("reads, exports, prints, and shell-escapes the gateway token without touching rc files", () => {
@@ -456,6 +476,36 @@ describe("nemoclaw-start gateway token export (#1114)", () => {
     expect(envFile).toContain("nemoclaw-configure-guard begin");
     expect(envFile).not.toContain(".bashrc");
     expect(envFile).not.toContain(".profile");
+  });
+
+  it("#3256: writes gateway port and URL into the runtime shell env", () => {
+    const { result, envFile } = runGatewayTokenHarness(
+      JSON.stringify({ gateway: { auth: { token: "token" } } }),
+      "stale-token",
+      "18790",
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("http://127.0.0.1:18790/");
+    expect(envFile).toContain("export OPENCLAW_GATEWAY_PORT='18790'");
+    expect(envFile).toContain("export OPENCLAW_GATEWAY_URL='ws://127.0.0.1:18790'");
+    expect(envFile).toContain("export OPENCLAW_GATEWAY_TOKEN='token'");
+  });
+
+  it("#3256: generates a gateway token before writing the runtime shell env", () => {
+    const { result, envFile, configAfter } = runGatewayTokenHarness(
+      JSON.stringify({ gateway: { auth: {} } }),
+      "stale-token",
+      "18790",
+      true,
+    );
+
+    expect(result.status).toBe(0);
+    expect(configAfter.gateway.auth.token).toEqual(expect.any(String));
+    expect(configAfter.gateway.auth.token).not.toBe("");
+    expect(envFile).toContain("export OPENCLAW_GATEWAY_PORT='18790'");
+    expect(envFile).toContain("export OPENCLAW_GATEWAY_URL='ws://127.0.0.1:18790'");
+    expect(envFile).toContain("export OPENCLAW_GATEWAY_TOKEN='");
   });
 
   it("unsets stale OPENCLAW_GATEWAY_TOKEN when no token is configured", () => {
@@ -1567,6 +1617,7 @@ describe("Telegram diagnostics (#2766)", () => {
         'normalize_mutable_config_perms() { echo "ORDER:normalize"; }',
         'apply_model_override() { :; }',
         'apply_cors_override() { :; }',
+        'ensure_gateway_token() { :; }',
         'export_gateway_token() { :; }',
         'write_runtime_shell_env() { :; }',
         'ensure_runtime_shell_env_shim() { :; }',

@@ -196,6 +196,8 @@ else
   CHAT_UI_URL="${CHAT_UI_URL:-http://127.0.0.1:${_DASHBOARD_PORT}}"
 fi
 PUBLIC_PORT="$_DASHBOARD_PORT"
+export OPENCLAW_GATEWAY_PORT="$_DASHBOARD_PORT"
+export OPENCLAW_GATEWAY_URL="ws://127.0.0.1:${_DASHBOARD_PORT}"
 OPENCLAW="$(command -v openclaw)" # Resolve once, use absolute path everywhere
 _SANDBOX_HOME="/sandbox"          # Home dir for the sandbox user (useradd -d /sandbox in Dockerfile.base)
 
@@ -673,6 +675,31 @@ except Exception:
 PYTOKEN
 }
 
+ensure_gateway_token() {
+  python3 - <<'PYTOKEN'
+import json
+import os
+import secrets
+import sys
+
+path = '/sandbox/.openclaw/openclaw.json'
+try:
+    with open(path) as f:
+        cfg = json.load(f)
+    auth = cfg.setdefault('gateway', {}).setdefault('auth', {})
+    if not auth.get('token'):
+        auth['token'] = secrets.token_urlsafe(32)
+        tmp_path = f'{path}.tmp'
+        with open(tmp_path, 'w') as f:
+            json.dump(cfg, f, indent=2)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+except Exception as exc:
+    print(f'[SECURITY] Failed to ensure OpenClaw gateway token: {exc}', file=sys.stderr)
+    sys.exit(1)
+PYTOKEN
+}
+
 export_gateway_token() {
   local token
   token="$(_read_gateway_token)"
@@ -1073,6 +1100,14 @@ export http_proxy="$_PROXY_URL"
 export https_proxy="$_PROXY_URL"
 export no_proxy="$_NO_PROXY_VAL"
 PROXYEOF
+    if [ -n "${OPENCLAW_GATEWAY_PORT:-}" ]; then
+      _escaped_gateway_port="$(printf '%s' "$OPENCLAW_GATEWAY_PORT" | sed "s/'/'\\\\''/g")"
+      printf "export OPENCLAW_GATEWAY_PORT='%s'\n" "$_escaped_gateway_port"
+    fi
+    if [ -n "${OPENCLAW_GATEWAY_URL:-}" ]; then
+      _escaped_gateway_url="$(printf '%s' "$OPENCLAW_GATEWAY_URL" | sed "s/'/'\\\\''/g")"
+      printf "export OPENCLAW_GATEWAY_URL='%s'\n" "$_escaped_gateway_url"
+    fi
     if [ -n "${OPENCLAW_GATEWAY_TOKEN:-}" ]; then
       _escaped_gateway_token="$(printf '%s' "$OPENCLAW_GATEWAY_TOKEN" | sed "s/'/'\\\\''/g")"
       printf "export OPENCLAW_GATEWAY_TOKEN='%s'\n" "$_escaped_gateway_token"
@@ -1500,6 +1535,7 @@ if [ "$(id -u)" -ne 0 ]; then
   normalize_mutable_config_perms
   apply_model_override
   apply_cors_override
+  ensure_gateway_token
   export_gateway_token
   write_runtime_shell_env
   ensure_runtime_shell_env_shim
@@ -1591,6 +1627,7 @@ verify_config_integrity_if_locked /sandbox/.openclaw
 normalize_mutable_config_perms
 apply_model_override
 apply_cors_override
+ensure_gateway_token
 export_gateway_token
 write_runtime_shell_env
 ensure_runtime_shell_env_shim
