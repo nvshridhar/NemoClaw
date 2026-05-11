@@ -277,6 +277,54 @@ report_residual_capabilities() {
   fi
 }
 
+# ── Privilege step-down (issue #3280 follow-up) ──────────────────
+# Replaces direct `gosu <user>` invocations with `setpriv` so the load-
+# bearing caps (cap_setuid, cap_setgid, cap_fowner, cap_chown, cap_kill)
+# are stripped from the bounding set *atomically with* the setuid
+# transition. gosu cannot do this: dropping those caps before gosu
+# breaks its setuid() syscall, and after gosu we are non-root and have
+# already lost CAP_SETPCAP. setpriv performs reuid + bounding-set drop
+# in a single process, in the correct order, before exec.
+#
+# Two prefix arrays are populated at source time:
+#   STEP_DOWN_PREFIX_SANDBOX  — step down to the 'sandbox' user
+#   STEP_DOWN_PREFIX_GATEWAY  — step down to the 'gateway' user
+#
+# Callers use them like the old `gosu <user>` prefix:
+#   exec "${STEP_DOWN_PREFIX_SANDBOX[@]}" "${NEMOCLAW_CMD[@]}"
+#   "${STEP_DOWN_PREFIX_SANDBOX[@]}" bash -c "..."
+#   nohup "${STEP_DOWN_PREFIX_GATEWAY[@]}" gateway run --port "$port" &
+#
+# Fallback: if setpriv is missing or CAP_SETPCAP isn't available, the
+# arrays fall back to plain `gosu <user>` and a warning is logged so the
+# residual bounding-set caps surface in the entrypoint log (matches the
+# residual-surface design of report_residual_capabilities).
+declare -ga STEP_DOWN_PREFIX_SANDBOX=()
+declare -ga STEP_DOWN_PREFIX_GATEWAY=()
+
+init_step_down_prefixes() {
+  if command -v setpriv >/dev/null 2>&1 \
+    && command -v capsh >/dev/null 2>&1 \
+    && capsh --has-p=cap_setpcap 2>/dev/null; then
+    # setpriv cap names are unprefixed (per `setpriv --list`); capsh uses
+    # cap_* names. Keep them in sync but format-distinct.
+    local drop="-setuid,-setgid,-fowner,-chown,-kill"
+    STEP_DOWN_PREFIX_SANDBOX=(
+      setpriv --reuid=sandbox --regid=sandbox --clear-groups
+      --bounding-set="$drop" --
+    )
+    STEP_DOWN_PREFIX_GATEWAY=(
+      setpriv --reuid=gateway --regid=gateway --clear-groups
+      --bounding-set="$drop" --
+    )
+  else
+    echo "[SECURITY WARNING] setpriv or CAP_SETPCAP unavailable — falling back to gosu (bounding set will retain cap_setuid/setgid/fowner/chown/kill — issue #3280)" >&2
+    STEP_DOWN_PREFIX_SANDBOX=(gosu sandbox)
+    STEP_DOWN_PREFIX_GATEWAY=(gosu gateway)
+  fi
+}
+init_step_down_prefixes
+
 # ── Config integrity check ──────────────────────────────────────
 # The config hash was pinned at build time. If it doesn't match,
 # someone (or something) has tampered with the config.
